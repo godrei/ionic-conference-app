@@ -1,0 +1,113 @@
+---
+format_version: 1.3.1
+default_step_lib_source: https://github.com/bitrise-io/bitrise-steplib.git
+app:
+  envs:
+# iOS
+  - BITRISE_SCHEME: Ionic Conference
+    opts:
+      is_expand: true
+workflows:
+  _ci_finish:
+    steps:
+    - deploy-to-bitrise-io:
+        run_if: '{{getenv "BITRISE_BUILD_URL" | ne ""}}'
+  _ci_setup:
+    steps:
+    - activate-ssh-key:
+        run_if: '{{getenv "SSH_RSA_PRIVATE_KEY" | ne ""}}'
+    - git-clone: {}
+  ci-ios:
+    before_run:
+    - _ci_setup
+    after_run:
+    - build-ios
+    - _ci_finish
+    steps:
+  ci-android:
+    before_run:
+    - _ci_setup
+    after_run:
+    - build-android
+    - _ci_finish
+    steps:
+  build-ios:
+    steps:
+    - git::https://github.com/bussmann-it/steps-ionic.git@master:
+        title: Ionic Build
+        inputs:
+        - build_for_platform: ios
+        - cordova_version: '7'
+        - ionic_version: '3'
+        - ios_provisioning_style: Manual
+        - build_parameters: "--release --prod"
+    - recreate-user-schemes:
+        inputs:
+        - project_path: "$BITRISE_PROJECT_PATH"
+    - certificate-and-profile-installer: {}
+    - xcode-archive:
+        inputs:
+        - compile_bitcode: 'no'
+        - configuration: Release
+        - force_team_id: 1A234BCD56
+        - force_code_sign_identity: iPhone Distribution
+        - force_provisioning_profile: a12345b6-c789-012d-34e5-f6ab7c89012d
+        - output_tool: xcodebuild
+  deploy-ios:
+    steps:
+    - deploy-to-itunesconnect-deliver:
+        inputs:
+        - itunescon_user: bitrise@apple.com
+        - password: Password
+        - app_id: '3333333333'
+    before_run:
+    - _ci_setup
+    - build-ios
+    after_run:
+    - _ci_finish
+  build-android:
+    steps:
+    - git::https://github.com/bussmann-it/steps-ionic.git@master:
+        title: Ionic Build
+        inputs:
+        - build_for_platform: android
+        - cordova_version: '7'
+        - ionic_version: '3'
+        - build_parameters: "--release --prod"
+    # We need this because we're waiting for this PR: https://github.com/bitrise-steplib/steps-sign-apk/pull/24
+    # Without merge we can not sign multiple APK files in one step
+    - git::https://github.com/bussmann-it/steps-sign-apk.git@master:
+        title: Sign APKs
+    - script:
+        title: Copy the signed APKs to bitrise.io deploy folder
+        inputs:
+        - content: |-
+            #!/bin/bash
+            set -ex
+            #
+            (IFS="|"; cp ${BITRISE_APK_PATH} "${BITRISE_DEPLOY_DIR}")
+    before_run:
+    after_run:
+  deploy-android:
+    before_run:
+    - _ci_setup
+    - build-android
+    after_run:
+    - _ci_finish
+    steps:
+    - google-play-deploy@1.1.0:
+        inputs:
+        - service_account_json_key_path: https://.../a123bcd4e5f6.json
+        - package_name: io.ionic.conferenceapp
+        - apk_path: "$BITRISE_APK_PATH"
+        - track: beta
+        - whatsnews_dir: ''
+        - service_account_email: ''
+        - key_file_path: ''
+trigger_map:
+- tag: "*"
+  workflow: deploy-ios
+#  workflow: deploy-android
+- push_branch: master
+  workflow: ci-ios
+#  workflow: ci-android
